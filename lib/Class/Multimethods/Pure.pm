@@ -7,7 +7,7 @@ no warnings 'uninitialized';
 
 use Carp;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 our %MULTI;
 our %MULTIPARAM;
@@ -523,8 +523,8 @@ sub less {
 
     my @args = $a->params;
     my @brgs = $b->params;
-    croak "Multis must have the same number of invocants"
-        unless @args == @brgs;
+    return 1 if @brgs < @args;
+    return 0 if @args < @brgs;
     
     my $proper = 0;
     for my $i (0..$#args) {
@@ -542,6 +542,7 @@ sub matches {
     my ($self, $args) = @_;
     
     my @params = $self->params;
+    return 0 if @$args < @params;
     
     for my $i (0..$#params) {
         unless ($params[$i]->matches($args->[$i])) {
@@ -565,20 +566,12 @@ sub new {
     bless { 
         variants => [], 
         Variant => $o{Variant} || 'Class::Multimethods::Pure::Variant',
-        list => undef,
-        params => undef,
+        vlist => undef,
     } => ref $class || $class;
 }
 
 sub add_variant { 
     my ($self, $params, $code) = @_;
-
-    if (defined $self->{params}) {
-        croak "Disagreeing number of parameters" if $self->{params} != @$params;
-    }
-    else {
-        $self->{params} = @$params;
-    }
 
     push @{$self->{variants}}, 
         $self->{Variant}->new(params => $params,
