@@ -7,7 +7,7 @@ no warnings 'uninitialized';
 
 use Carp;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 our %MULTI;
 our %MULTIPARAM;
@@ -259,11 +259,19 @@ sub string;
      });
 }
 
+package Class::Multimethods::Pure::Type::Normal;
+
+# Non-junctive thingies
+use base 'Class::Multimethods::Pure::Type';
+
+package Class::Multimethods::Pure::Type::Subtypable;
+
+use base 'Class::Multimethods::Pure::Type::Normal';
 
 package Class::Multimethods::Pure::Type::Package;
 
 # A regular package type
-use base 'Class::Multimethods::Pure::Type';
+use base 'Class::Multimethods::Pure::Type::Normal';
 
 use Scalar::Util qw<blessed>;
 
@@ -302,15 +310,6 @@ sub string {
     my ($self) = @_;
     $self->name;
 }
-
-package Class::Multimethods::Pure::Type::Normal;
-
-# Non-junctive thingies
-use base 'Class::Multimethods::Pure::Type';
-
-package Class::Multimethods::Pure::Type::Subtypable;
-
-use base 'Class::Multimethods::Pure::Type::Normal';
 
 package Class::Multimethods::Pure::Type::Unblessed;
 
@@ -559,10 +558,84 @@ sub string {
 
 package Class::Multimethods::Pure::Method;
 
+sub new {   # this needs to be overridden by subclasses
+    Class::Multimethods::Pure::Method::Slow->new(@_[1..$#_]);
+}
+
+sub call {
+    my $self = shift;
+
+    my $code = $self->find_variant(\@_)->code;
+    goto &$code;
+}
+
+package Class::Multimethods::Pure::Method::Slow;
+
+use base 'Class::Multimethods::Pure::Method';
 use Carp;
 
 sub new {
     my ($class, %o) = @_;
+    bless {
+        variants => [],
+        Variant => $o{Variant} || 'Class::Multimethods::Pure::Variant',
+    } => ref $class || $class;
+}
+
+sub add_variant {
+    my ($self, $params, $code) = @_;
+    
+    push @{$self->{variants}}, 
+        $self->{Variant}->new(params => $params,
+                              code => $code);
+}
+
+sub find_variant {
+    my ($self, $args) = @_;
+    
+    my @cand;
+    VARIANT:
+    for my $variant (@{$self->{variants}}) {
+        if ($variant->matches($args)) {
+            for (@cand) {
+                if ($_->less($variant)) {
+                    # we're dominated: don't enter the list
+                    next VARIANT;
+                }
+            }
+            # okay, we're in
+            for (my $i = 0; $i < @cand; $i++) {
+                if ($variant->less($cand[$i])) {
+                    # we dominate this variant: take it out of the list
+                    splice @cand, $i, 1;
+                    $i--;
+                }
+            }
+            push @cand, $variant;
+        }
+    }
+
+    if (@cand == 1) {
+        return $cand[0];
+    }
+    elsif (@cand == 0) {
+        croak "No method found for args (@$args)";
+    }
+    else {
+        croak "Ambiguous method call for args (@$args):\n" .
+            join '', map { "    " . $_->string . "\n" } @cand;
+    }
+}
+
+package Class::Multimethods::Pure::Method::DominatingOrder;
+# XXX this algorithm is fundamentally flawed
+
+use base 'Class::Multimethods::Pure::Method';
+use Carp qw<cluck croak>;
+
+sub new {
+    my ($class, %o) = @_;
+    cluck "The DominatingOrder dispatcher is deprecated: it doesn't detect ambiguities in all cases";
     bless { 
         variants => [], 
         Variant => $o{Variant} || 'Class::Multimethods::Pure::Variant',
@@ -608,6 +681,20 @@ sub compile {
     $self->{vlist}
 }
 
+# returns a string that represents the compiled singular ordering
+sub debug_compiled {
+    my ($self, $name) = @_;
+    my $compiled = $self->compile;
+    my $debug = "====$name====\n";
+    for my $set (reverse @$compiled) {
+        for (@$set) {
+            $debug .= $_->string . "\n";
+        }
+        $debug .= "----\n";
+    }
+    $debug;
+}
+
 sub find_variant {
     my ($self, $args) = @_;
 
@@ -625,13 +712,6 @@ sub find_variant {
     }
     
     croak "No method found for args (@$args)";
-}
-
-sub call {
-    my $self = shift;
-
-    my $code = $self->find_variant(\@_)->code;
-    goto &$code;
 }
 
 1;
